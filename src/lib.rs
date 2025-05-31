@@ -19,6 +19,8 @@ pub mod hybrid;
 
 pub use math::CustomFloat;
 
+pub mod python;
+
 /// Equatorial coordinates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LonLat {
@@ -306,6 +308,7 @@ impl<T: CanonicalProjection> Projection for T {
 
 /// Structure performing a rotation (due to non-vernal projection origin)
 /// before projecting/after deprojecting.
+#[derive(Clone)]
 pub struct CenteredProjection<T: CanonicalProjection> {
   // Parameters of the rotation matrix
   r11: f64, r12: f64, r13: f64,

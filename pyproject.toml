@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"] # Updated maturin version
+build-backend = "maturin"
+
+[project]
+name = "mapproj" # Changed from mapproj_py
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]

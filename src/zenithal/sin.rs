@@ -3,6 +3,7 @@
 use crate::{CanonicalProjection, CustomFloat, ProjBounds, ProjXY, XYZ};
 
 /// Orthographic projection.
+#[derive(Clone)]
 pub struct Sin;
 
 impl Default for Sin {
