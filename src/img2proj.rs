@@ -314,12 +314,13 @@ impl ImgXY2ProjXY for WcsWithSipImgXY2ProjXY {
     let x_undistorted = self.wcs.cd11 * x_pix + self.wcs.cd12 * y_pix;
     let y_undistorted = self.wcs.cd21 * x_pix + self.wcs.cd22 * y_pix;
     
-    // 3. Apply SIP distortion in world coordinates
-    // The SIP standard (Greisen et al. 2002, A&A, 395, 1077) states that the
-    // SIP polynomials f(u,v) and g(u,v) are functions of intermediate world
-    // coordinates (u,v), which are x_undistorted, y_undistorted in our case.
-    let x_distorted = x_undistorted + self.sip.f(x_undistorted, y_undistorted);
-    let y_distorted = y_undistorted + self.sip.g(x_undistorted, y_undistorted);
+    // 3. Apply SIP distortion. 
+    // The mapproj::Sip methods f(u,v) and g(u,v) expect u and v to be
+    // pixel offsets from CRPIX, i.e., (x_pixel - CRPIX1) and (y_pixel - CRPIX2).
+    // These are x_pix and y_pix as calculated above.
+    // The distortion is then added to the intermediate world coordinates (x_undistorted, y_undistorted).
+    let x_distorted = x_undistorted + self.sip.f(x_pix, y_pix);
+    let y_distorted = y_undistorted + self.sip.g(x_pix, y_pix);
     
     ProjXY::new(x_distorted, y_distorted)
   }
