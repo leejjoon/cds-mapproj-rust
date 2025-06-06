@@ -36,62 +36,68 @@ impl SipCoeff {
   
   /// Returns the value of the polynomial, evaluated in `(u, v)`.
   pub fn p(&self, u: f64, v: f64) -> f64 {
-    // Probably not the most efficient way to implement this. TODO: think twice...
-    let mut k = 0;
-    let mut p = 0_f64;
-    let mut x = u;
-    for i in 0..self.order {
-      let l = self.order - i;
-      let mut y = v;
-      for _ in 0..l {
-        p += x * y * self.c[k];
-        k += 1;
-        y *= y; // Not optimal for numerical stability :o/
-      }
-      x *= x; // Not optimal for numerical stability :o/
+    if self.c.is_empty() { // Handle case of no coefficients
+        return 0.0;
     }
-    debug_assert_eq!(k, self.c.len());
-    p
+    let mut sum_val = 0.0;
+    let mut k = 0; // Index for the coefficient array self.c
+    // self.order stores M_fits + 1, where M_fits is the FITS polynomial degree.
+    let m_fits = self.order - 1;
+    // Polynomial: Sum_{i=0 to M_fits} Sum_{j=0 to M_fits-i} C_ij * u^i * v^j
+    for i_power in 0..=m_fits { // i from 0 to M_fits (inclusive)
+        let u_pow_i = u.powi(i_power as i32);
+        for j_power in 0..=(m_fits - i_power) { // j from 0 to M_fits-i (inclusive)
+            // Given the loop structure and m_fits derivation, k should not exceed c.len()
+            // before the loop finishes all terms.
+            let v_pow_j = v.powi(j_power as i32);
+            sum_val += self.c[k] * u_pow_i * v_pow_j;
+            k += 1;
+        }
+    }
+    debug_assert_eq!(k, self.c.len(), "Mismatch in coefficient usage for p: expected {}, got {}", self.c.len(), k);
+    sum_val
   }
 
   /// Returns the value of the `dp/du`, evaluated in `(u, v)`.
   pub fn dpdu(&self, u: f64, v: f64) -> f64 {
-    // Probably not the most efficient way to implement this. TODO: think twice...
+    if self.c.is_empty() { return 0.0; }
+    let mut sum_val = 0.0;
     let mut k = 0;
-    let mut p = 0_f64;
-    let mut x = u;
-    for i in 1..self.order {
-      let l = self.order - i;
-      let mut y = v;
-      for _ in 0..l {
-        p += i as f64 * x * y * self.c[k];
-        k += 1;
-        y *= y; // Not optimal for numerical stability :o/
-      }
-      x *= x; // Not optimal for numerical stability :o/
+    let m_fits = self.order - 1;
+    // Derivative: Sum C_ij * i * u^(i-1) * v^j
+    for i_power in 0..=m_fits {
+        for j_power in 0..=(m_fits - i_power) {
+            if i_power > 0 {
+                let u_pow_i_minus_1 = u.powi(i_power as i32 - 1);
+                let v_pow_j = v.powi(j_power as i32);
+                sum_val += self.c[k] * (i_power as f64) * u_pow_i_minus_1 * v_pow_j;
+            }
+            k += 1;
+        }
     }
-    debug_assert_eq!(k, self.c.len());
-    p
+    debug_assert_eq!(k, self.c.len(), "Mismatch in coefficient usage for dpdu: expected {}, got {}", self.c.len(), k);
+    sum_val
   }
 
   /// Returns the value of the `dp/dv`, evaluated in `(u, v)`.
   pub fn dpdv(&self, u: f64, v: f64) -> f64 {
-    // Probably not the most efficient way to implement this. TODO: think twice...
+    if self.c.is_empty() { return 0.0; }
+    let mut sum_val = 0.0;
     let mut k = 0;
-    let mut p = 0_f64;
-    let mut x = u;
-    for i in 0..self.order {
-      let l = self.order - i;
-      let mut y = v;
-      for j in 1..l {
-        p += j as f64 * x * y * self.c[k];
-        k += 1;
-        y *= y; // Not optimal for numerical stability :o/
-      }
-      x *= x; // Not optimal for numerical stability :o/
+    let m_fits = self.order - 1;
+    // Derivative: Sum C_ij * u^i * j * v^(j-1)
+    for i_power in 0..=m_fits {
+        for j_power in 0..=(m_fits - i_power) {
+            if j_power > 0 {
+                let u_pow_i = u.powi(i_power as i32);
+                let v_pow_j_minus_1 = v.powi(j_power as i32 - 1);
+                sum_val += self.c[k] * (j_power as f64) * u_pow_i * v_pow_j_minus_1;
+            }
+            k += 1;
+        }
     }
-    debug_assert_eq!(k, self.c.len());
-    p
+    debug_assert_eq!(k, self.c.len(), "Mismatch in coefficient usage for dpdv: expected {}, got {}", self.c.len(), k);
+    sum_val
   }
   
 }
@@ -280,4 +286,108 @@ impl Sip {
       None
     }
   }
+}
+
+#[cfg(test)]
+mod sip_coeff_tests {
+    use super::*;
+
+    const EPS: f64 = 1e-9;
+
+    fn assert_approx_eq(a: f64, b: f64, msg: &str) {
+        assert!((a - b).abs() < EPS, "{}\n  left: {}\n right: {}", msg, a, b);
+    }
+
+    #[test]
+    fn test_empty_coeffs() {
+        let coeffs = SipCoeff::new(Box::new([]));
+        assert_eq!(coeffs.order, 0, "Order for empty coeffs should be 0");
+        assert_approx_eq(coeffs.p(1.0, 1.0), 0.0, "p(u,v) with empty coeffs");
+        assert_approx_eq(coeffs.dpdu(1.0, 1.0), 0.0, "dpdu(u,v) with empty coeffs");
+        assert_approx_eq(coeffs.dpdv(1.0, 1.0), 0.0, "dpdv(u,v) with empty coeffs");
+    }
+
+    #[test]
+    fn test_zero_order_poly() {
+        // M_fits = 0. f(u,v) = C00
+        // self.order = M_fits + 1 = 1
+        let c = vec![10.0]; // C00 = 10.0
+        let coeffs = SipCoeff::new(c.into_boxed_slice());
+        assert_eq!(coeffs.order, 1);
+
+        let u = 2.0;
+        let v = 3.0;
+
+        // p(u,v) = C00
+        assert_approx_eq(coeffs.p(u, v), 10.0, "p(u,v) for M=0");
+        assert_approx_eq(coeffs.p(0.0, 0.0), 10.0, "p(0,0) for M=0");
+        // dpdu(u,v) = 0
+        assert_approx_eq(coeffs.dpdu(u, v), 0.0, "dpdu(u,v) for M=0");
+        // dpdv(u,v) = 0
+        assert_approx_eq(coeffs.dpdv(u, v), 0.0, "dpdv(u,v) for M=0");
+    }
+
+    #[test]
+    fn test_first_order_poly() {
+        // M_fits = 1. f(u,v) = C00 + C10*u + C01*v
+        // self.order = M_fits + 1 = 2
+        // Conceptual coefficient values: C00=1.0, C10=2.0, C01=3.0
+        // FITS standard order for c: C00, C01, C10
+        let c = vec![1.0, 3.0, 2.0];
+        let coeffs = SipCoeff::new(c.into_boxed_slice());
+        assert_eq!(coeffs.order, 2);
+
+        let u = 0.5;
+        let v = -0.2;
+
+        // p(u,v) = 1.0 + 2.0*0.5 + 3.0*(-0.2) = 1.0 + 1.0 - 0.6 = 1.4
+        let expected_p = 1.0 + 2.0 * u + 3.0 * v;
+        assert_approx_eq(coeffs.p(u, v), expected_p, "p(u,v) for M=1");
+        assert_approx_eq(coeffs.p(0.0, 0.0), 1.0, "p(0,0) for M=1 should be C00");
+
+        // dpdu(u,v) = C10 = 2.0
+        let expected_dpdu = 2.0;
+        assert_approx_eq(coeffs.dpdu(u, v), expected_dpdu, "dpdu(u,v) for M=1");
+
+        // dpdv(u,v) = C01 = 3.0
+        let expected_dpdv = 3.0;
+        assert_approx_eq(coeffs.dpdv(u, v), expected_dpdv, "dpdv(u,v) for M=1");
+    }
+
+    #[test]
+    fn test_second_order_poly() {
+        // M_fits = 2. f(u,v) = C00 + C10*u + C01*v + C20*u^2 + C11*u*v + C02*v^2
+        // self.order = M_fits + 1 = 3
+        // Conceptual coefficient values: C00=1.0, C10=2.0, C01=3.0, C20=4.0, C11=5.0, C02=6.0
+        // FITS standard order for c: C00, C01, C02, C10, C11, C20
+        let c = vec![1.0, 3.0, 6.0, 2.0, 5.0, 4.0];
+        let coeffs = SipCoeff::new(c.into_boxed_slice());
+        assert_eq!(coeffs.order, 3);
+
+        let u: f64 = 0.5;
+        let v: f64 = 0.2;
+
+        // p(u,v) = 1.0 + 2.0*u + 3.0*v + 4.0*u^2 + 5.0*u*v + 6.0*v^2
+        // p(0.5, 0.2) = 1.0 + 2*0.5 + 3*0.2 + 4*0.5^2 + 5*0.5*0.2 + 6*0.2^2
+        //             = 1.0 + 1.0   + 0.6   + 4*0.25  + 5*0.1   + 6*0.04
+        //             = 1.0 + 1.0   + 0.6   + 1.0     + 0.5     + 0.24
+        //             = 4.34
+        let expected_p = 1.0 + 2.0*u + 3.0*v + 4.0*u.powi(2) + 5.0*u*v + 6.0*v.powi(2);
+        assert_approx_eq(coeffs.p(u, v), expected_p, "p(u,v) for M=2");
+        assert_approx_eq(coeffs.p(0.0, 0.0), 1.0, "p(0,0) for M=2 should be C00");
+
+        // dpdu(u,v) = C10 + 2*C20*u + C11*v
+        // dpdu(0.5, 0.2) = 2.0 + 2*4.0*0.5 + 5.0*0.2
+        //                = 2.0 + 4.0       + 1.0
+        //                = 7.0
+        let expected_dpdu = 2.0 + 2.0*4.0*u + 5.0*v;
+        assert_approx_eq(coeffs.dpdu(u, v), expected_dpdu, "dpdu(u,v) for M=2");
+
+        // dpdv(u,v) = C01 + C11*u + 2*C02*v
+        // dpdv(0.5, 0.2) = 3.0 + 5.0*0.5 + 2*6.0*0.2
+        //                = 3.0 + 2.5       + 2.4
+        //                = 7.9
+        let expected_dpdv = 3.0 + 5.0*u + 2.0*6.0*v;
+        assert_approx_eq(coeffs.dpdv(u, v), expected_dpdv, "dpdv(u,v) for M=2");
+    }
 }
