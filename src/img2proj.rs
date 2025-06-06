@@ -301,28 +301,39 @@ impl ImgXY2ProjXY for WcsWithSipImgXY2ProjXY {
 
   /// Transform the pixel coordinates to the intermediate world coordinates
   /// (or native spherical coordinates) by applying first a translation
-  /// (given the `CRPIXi` keywords value) and then a rotation plus a scale
-  /// (given the `CDij` keywords values).
+  /// (given the `CRPIXi` keywords value), then a rotation plus a scale
+  /// (given the `CDij` keywords values), and finally the SIP distortion.
   /// # Params
-  /// * `imgXY`: pixel coordinates (no units) to be transformed intermediate world coordinates
+  /// * `imgXY`: pixel coordinates (no units) to be transformed to intermediate world coordinates
   fn img2proj(&self, xy: &ImgXY) -> ProjXY {
-    // Translation
-    let mut x = xy.x - self.wcs.crpix1;
-    let mut y = xy.y - self.wcs.crpix2;
-    let tmp = x;
-    x += self.sip.f(x, y);
-    y += self.sip.g(tmp, y);
-    // Rotation + scale
-    ProjXY::new(
-      self.wcs.cd11 * x + self.wcs.cd12 * y,
-      self.wcs.cd21 * x + self.wcs.cd22 * y
-    )
+    // 1. Translate to reference pixel (CRPIX)
+    let x_pix = xy.x - self.wcs.crpix1;
+    let y_pix = xy.y - self.wcs.crpix2;
+    
+    // 2. Apply CD matrix to get undistorted world coordinates
+    let x_undistorted = self.wcs.cd11 * x_pix + self.wcs.cd12 * y_pix;
+    let y_undistorted = self.wcs.cd21 * x_pix + self.wcs.cd22 * y_pix;
+    
+    // 3. Apply SIP distortion in world coordinates
+    let x_distorted = x_undistorted + self.sip.f(x_pix, y_pix);
+    let y_distorted = y_undistorted + self.sip.g(x_pix, y_pix);
+    
+    ProjXY::new(x_distorted, y_distorted)
   }
   
   fn inverse(&self) -> Self::T {
     WcsWithSipProjXY2ImgXY {
-     wcs: self.wcs.inverse(),
-     sip: self.sip.clone()
+      // The inverse WCS transformation (includes inverse CD matrix and CRPIX offset)
+      wcs: WcsProjXY2ImgXY {
+        crpix1: self.wcs.crpix1,
+        crpix2: self.wcs.crpix2,
+        icd11: self.wcs.icd11,
+        icd12: self.wcs.icd12,
+        icd21: self.wcs.icd21,
+        icd22: self.wcs.icd22,
+      },
+      // The same SIP coefficients are used for both forward and inverse transformations
+      sip: self.sip.clone()
     }
   }
 }
@@ -356,10 +367,25 @@ pub struct WcsWithSipProjXY2ImgXY {
 
 impl ProjXY2ImgXY for WcsWithSipProjXY2ImgXY {
 
+  /// Transform from intermediate world coordinates to pixel coordinates by first
+  /// removing the SIP distortion in world coordinates, then applying the inverse
+  /// CD matrix, and finally adding the CRPIX offset.
+  /// # Params
+  /// * `xy`: intermediate world coordinates to be transformed to pixel coordinates
   fn proj2img(&self, xy: &ProjXY) -> Option<ImgXY> {
-    let x = self.wcs.icd11 * xy.x + self.wcs.icd12 * xy.y + self.wcs.crpix1;
-    let y = self.wcs.icd21 * xy.x + self.wcs.icd22 * xy.y + self.wcs.crpix2;
-    self.sip.inverse(x, y).map(|ImgXY{x: rx, y: ry}| ImgXY::new(x + rx, y + ry))
+    // 1. Remove SIP distortion in world coordinates using Newton-Raphson
+    // This gives us the undistorted world coordinates
+    let undistorted = self.sip.inverse(xy.x, xy.y)?;
+    
+    // 2. Apply inverse CD matrix to get pixel coordinates relative to CRPIX
+    let x_pix = self.wcs.icd11 * undistorted.x + self.wcs.icd12 * undistorted.y;
+    let y_pix = self.wcs.icd21 * undistorted.x + self.wcs.icd22 * undistorted.y;
+    
+    // 3. Add CRPIX offset to get final pixel coordinates
+    Some(ImgXY::new(
+      x_pix + self.wcs.crpix1,
+      y_pix + self.wcs.crpix2
+    ))
   }
 }
 
