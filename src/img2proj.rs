@@ -322,15 +322,20 @@ impl ImgXY2ProjXY for WcsWithSipImgXY2ProjXY {
   }
   
   fn inverse(&self) -> Self::T {
+    // Compute the inverse CD matrix
+    let det = self.wcs.cd11 * self.wcs.cd22 - self.wcs.cd12 * self.wcs.cd21;
+    let det_inv = 1.0 / det;
+    
     WcsWithSipProjXY2ImgXY {
       // The inverse WCS transformation (includes inverse CD matrix and CRPIX offset)
       wcs: WcsProjXY2ImgXY {
         crpix1: self.wcs.crpix1,
         crpix2: self.wcs.crpix2,
-        icd11: self.wcs.icd11,
-        icd12: self.wcs.icd12,
-        icd21: self.wcs.icd21,
-        icd22: self.wcs.icd22,
+        // Inverse of CD matrix
+        icd11: self.wcs.cd22 * det_inv,
+        icd12: -self.wcs.cd12 * det_inv,
+        icd21: -self.wcs.cd21 * det_inv,
+        icd22: self.wcs.cd11 * det_inv,
       },
       // The same SIP coefficients are used for both forward and inverse transformations
       sip: self.sip.clone()
