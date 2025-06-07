@@ -209,6 +209,17 @@ impl Sip {
     self.ab_proj.b.dpdv(u, v)
   }
 
+  /// Evaluates the AP polynomial (inverse distortion for the first axis).
+  /// Arguments u, v are 1-indexed pixel offsets: (pixel_coord - CRPIX_header).
+  pub fn ap(&self, u: f64, v: f64) -> Option<f64> {
+    self.ab_deproj.as_ref().map(|coeffs| coeffs.a.p(u, v))
+  }
+
+  /// Evaluates the BP polynomial (inverse distortion for the second axis).
+  /// Arguments u, v are 1-indexed pixel offsets: (pixel_coord - CRPIX_header).
+  pub fn bp(&self, u: f64, v: f64) -> Option<f64> {
+    self.ab_deproj.as_ref().map(|coeffs| coeffs.b.p(u, v))
+  }
 
   pub fn u(&self, fuv: f64, guv: f64) -> Option<f64> {
     self.ab_deproj.as_ref().map(|ab| ab.a.p(fuv, guv))

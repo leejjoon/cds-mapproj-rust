@@ -186,6 +186,7 @@ impl WcsImgXY2ProjXY {
     cd11: f64, cd12: f64, 
     cd21: f64, cd22: f64,
   ) -> Self {
+    eprintln!("[mapproj DEBUG WcsImgXY2ProjXY::from_cd] crpix1: {:.15}, crpix2: {:.15}", crpix1, crpix2);
     Self {
       crpix1, crpix2,
       cd11: cd11.to_radians(),
@@ -210,6 +211,7 @@ impl WcsImgXY2ProjXY {
     pc21: f64,  pc22: f64,
     cdelt1: f64, cdelt2: f64
   ) -> Self {
+    eprintln!("[mapproj DEBUG WcsImgXY2ProjXY::from_pc] crpix1: {:.15}, crpix2: {:.15}", crpix1, crpix2);
     Self::from_cd(
       crpix1, crpix2,
       cdelt1 * pc11, cdelt1 * pc12,
@@ -228,6 +230,7 @@ impl WcsImgXY2ProjXY {
     crota2: f64,
     cdelt1: f64, cdelt2: f64
   ) -> Self {
+    eprintln!("[mapproj DEBUG WcsImgXY2ProjXY::from_cr] crpix1: {:.15}, crpix2: {:.15}", crpix1, crpix2);
     let (sinc, cosc) = crota2.to_radians().sin_cos();
     Self::from_cd(
       crpix1, crpix2, 
@@ -249,6 +252,8 @@ impl ImgXY2ProjXY for WcsImgXY2ProjXY {
   /// # Params
   /// * `imgXY`: pixel coordinates (no units) to be transformed intermediate world coordinates
   fn img2proj(&self, xy: &ImgXY) -> ProjXY {
+    eprintln!("[mapproj DEBUG WcsImgXY2ProjXY::img2proj] self.crpix1: {:.15}, self.crpix2: {:.15}", self.crpix1, self.crpix2);
+    eprintln!("[mapproj DEBUG WcsImgXY2ProjXY::img2proj] input xy.x: {:.15}, xy.y: {:.15}", xy.x, xy.y);
     // Translation
     let x = xy.x - self.crpix1;
     let y = xy.y - self.crpix2;
@@ -290,6 +295,7 @@ impl WcsWithSipImgXY2ProjXY {
   
   /// Add SIP convention to a regular WCS transformation.
   pub fn new(wcs: WcsImgXY2ProjXY, sip: Sip) -> Self {
+    eprintln!("[mapproj DEBUG WcsWithSipImgXY2ProjXY::new] wcs.crpix1: {:.15}, wcs.crpix2: {:.15}", wcs.crpix1, wcs.crpix2);
     Self { wcs, sip }
   }
   
@@ -306,40 +312,53 @@ impl ImgXY2ProjXY for WcsWithSipImgXY2ProjXY {
   /// # Params
   /// * `imgXY`: pixel coordinates (no units) to be transformed to intermediate world coordinates
   fn img2proj(&self, xy: &ImgXY) -> ProjXY {
-    // 1. Translate to reference pixel (CRPIX)
-    let x_pix = xy.x - self.wcs.crpix1;
-    let y_pix = xy.y - self.wcs.crpix2;
-    
-    // 2. Apply CD matrix to get undistorted world coordinates
-    let x_undistorted = self.wcs.cd11 * x_pix + self.wcs.cd12 * y_pix;
-    let y_undistorted = self.wcs.cd21 * x_pix + self.wcs.cd22 * y_pix;
-    
-    // 3. Apply SIP distortion. 
-    // The mapproj::Sip methods f(u,v) and g(u,v) expect u and v to be
-    // pixel offsets from CRPIX, i.e., (x_pixel - CRPIX1) and (y_pixel - CRPIX2).
-    // These are x_pix and y_pix as calculated above.
-    // The distortion is then added to the intermediate world coordinates (x_undistorted, y_undistorted).
-    let x_distorted = x_undistorted + self.sip.f(x_pix, y_pix);
-    let y_distorted = y_undistorted + self.sip.g(x_pix, y_pix);
-    
-    ProjXY::new(x_distorted, y_distorted)
+    eprintln!("[mapproj DEBUG WcsWithSipImgXY2ProjXY::img2proj] self.wcs.crpix1: {:.15}, self.wcs.crpix2: {:.15}", self.wcs.crpix1, self.wcs.crpix2);
+    eprintln!("[mapproj DEBUG WcsWithSipImgXY2ProjXY::img2proj] input xy.x: {:.15}, xy.y: {:.15}", xy.x, xy.y);
+    // Compute 1-indexed pixel offsets from CRPIX (FITS header value).
+    // SIP polynomials f(u,v), g(u,v), AP(u,v), BP(u,v) take u = x_image - CRPIX1 
+    // and v = y_image - CRPIX2 as arguments, where x_image, y_image are 
+    // 1-based pixel coordinates and CRPIX1, CRPIX2 are 1-based from FITS.
+    // The input `xy` from wcs-rs is 0-based.
+    // So, u_sip_arg = (xy.x + 1.0) - self.wcs.crpix1
+    // And v_sip_arg = (xy.y + 1.0) - self.wcs.crpix2
+    // These are the 1-indexed offsets required by SIP polynomials and CD matrix.
+    let u_sip_arg = (xy.x + 0.0) - self.wcs.crpix1;
+    let v_sip_arg = (xy.y + 0.0) - self.wcs.crpix2;
+    eprintln!("[mapproj SIP INV DEBUG] u_sip_arg: {:.15e}, v_sip_arg: {:.15e}", u_sip_arg, v_sip_arg);
+
+    // Apply inverse SIP distortion (AP and BP polynomials) using the new public methods.
+    // The arguments to ap/bp are the same 1-indexed offsets u_sip_arg, v_sip_arg.
+    let ap_val = self.sip.ap(u_sip_arg, v_sip_arg).unwrap_or(0.0);
+    let bp_val = self.sip.bp(u_sip_arg, v_sip_arg).unwrap_or(0.0);
+    eprintln!("[mapproj SIP INV DEBUG] ap_val: {:.15e}, bp_val: {:.15e}", ap_val, bp_val);
+
+    // Calculate corrected pixel offsets u' and v' (FITS WCS Paper I, Eq. 6)
+    let u_corrected = u_sip_arg + ap_val;
+    let v_corrected = v_sip_arg + bp_val;
+    eprintln!("[mapproj SIP INV DEBUG] u_corrected: {:.15e}, v_corrected: {:.15e}", u_corrected, v_corrected);
+
+    // Linear transformation part: apply CD matrix to corrected pixel offsets
+    let u_final_iwc = self.wcs.cd11 * u_corrected + self.wcs.cd12 * v_corrected;
+    let v_final_iwc = self.wcs.cd21 * u_corrected + self.wcs.cd22 * v_corrected;
+    eprintln!("[mapproj SIP INV DEBUG] u_final_iwc (CD*u'): {:.15e}, v_final_iwc (CD*v'): {:.15e}", u_final_iwc, v_final_iwc);
+
+    ProjXY::new(u_final_iwc, v_final_iwc)
   }
   
   fn inverse(&self) -> Self::T {
     // Compute the inverse CD matrix
     let det = self.wcs.cd11 * self.wcs.cd22 - self.wcs.cd12 * self.wcs.cd21;
-    let det_inv = 1.0 / det;
-    
+    // Compute the coefficient of the inverse matrix
     WcsWithSipProjXY2ImgXY {
       // The inverse WCS transformation (includes inverse CD matrix and CRPIX offset)
       wcs: WcsProjXY2ImgXY {
         crpix1: self.wcs.crpix1,
         crpix2: self.wcs.crpix2,
         // Inverse of CD matrix
-        icd11: self.wcs.cd22 * det_inv,
-        icd12: -self.wcs.cd12 * det_inv,
-        icd21: -self.wcs.cd21 * det_inv,
-        icd22: self.wcs.cd11 * det_inv,
+        icd11: self.wcs.cd22 / det,
+        icd12: -self.wcs.cd21 / det,
+        icd21: -self.wcs.cd12 / det,
+        icd22: self.wcs.cd11 / det,
       },
       // The same SIP coefficients are used for both forward and inverse transformations
       sip: self.sip.clone()
@@ -360,6 +379,8 @@ pub struct WcsProjXY2ImgXY {
 impl ProjXY2ImgXY for WcsProjXY2ImgXY {
   
   fn proj2img(&self, xy: &ProjXY) -> Option<ImgXY> {
+    eprintln!("[mapproj DEBUG WcsProjXY2ImgXY::proj2img] self.crpix1: {:.15}, self.crpix2: {:.15}", self.crpix1, self.crpix2);
+    eprintln!("[mapproj DEBUG WcsProjXY2ImgXY::proj2img] input xy.x: {:.15}, xy.y: {:.15}", xy.x, xy.y);
     let x = self.icd11 * xy.x + self.icd12 * xy.y + self.crpix1;
     let y = self.icd21 * xy.x + self.icd22 * xy.y + self.crpix2;
     Some(ImgXY::new(x, y))
@@ -382,21 +403,37 @@ impl ProjXY2ImgXY for WcsWithSipProjXY2ImgXY {
   /// # Params
   /// * `xy`: intermediate world coordinates to be transformed to pixel coordinates
   fn proj2img(&self, xy: &ProjXY) -> Option<ImgXY> {
-    // 1. Remove SIP distortion in world coordinates using Newton-Raphson
-    // This gives us the undistorted world coordinates
-    let undistorted = self.sip.inverse(xy.x, xy.y)?;
-    
-    // 2. Apply inverse CD matrix to get pixel coordinates relative to CRPIX
-    let x_pix = self.wcs.icd11 * undistorted.x + self.wcs.icd12 * undistorted.y;
-    let y_pix = self.wcs.icd21 * undistorted.x + self.wcs.icd22 * undistorted.y;
-    
-    // 3. Add CRPIX offset to get final pixel coordinates
-    Some(ImgXY::new(
-      x_pix + self.wcs.crpix1,
-      y_pix + self.wcs.crpix2
-    ))
+    // 1. Perform the linear part of the transformation (inverse CD matrix + CRPIX offset)
+    // This gives absolute pixel coordinates as if there were no SIP distortion.
+    let img_xy_linear_absolute = self.wcs.proj2img(xy)?;
+
+    // 2. Convert these absolute linear pixel coordinates to offsets from CRPIX.
+    // The self.sip.inverse(u, v) method (which applies AP and BP polynomials)
+    // Now, img_xy_linear contains pixel coordinates *as if there were no SIP distortion*.
+    // These are effectively the (u, v) + CRPIX for the SIP polynomials A and B.
+    // We need to calculate u and v (offsets from CRPIX)
+    let u = img_xy_linear_absolute.x - self.wcs.crpix1; // This is u_intermediate_scaled
+    let v = img_xy_linear_absolute.y - self.wcs.crpix2; // This is v_intermediate_scaled
+
+    // Apply forward SIP distortion A and B
+    // x_final = u + CRPIX + A(u,v)
+    // y_final = v + CRPIX + B(u,v)
+    // Since img_xy_linear_absolute.x() = u + CRPIX1_0_based,
+    // x_final_0_based = img_xy_linear_absolute.x() + self.sip.f(u, v)
+    let linear_x = img_xy_linear_absolute.x;
+    let linear_y = img_xy_linear_absolute.y;
+    let sip_offset_x = self.sip.f(u, v);
+    let sip_offset_y = self.sip.g(u, v);
+
+    eprintln!("[mapproj DEBUG] linear_x: {:.15}", linear_x);
+    eprintln!("[mapproj DEBUG] sip_offset_x (A_u_v): {:.15}", sip_offset_x);
+    eprintln!("[mapproj DEBUG] linear_y: {:.15}", linear_y);
+    eprintln!("[mapproj DEBUG] sip_offset_y (B_u_v): {:.15}", sip_offset_y);
+
+    let final_x = linear_x + sip_offset_x;
+    let final_y = linear_y + sip_offset_y;
+    eprintln!("[mapproj DEBUG] final_x (sum): {:.15}", final_x);
+    eprintln!("[mapproj DEBUG] final_y (sum): {:.15}", final_y);
+    Some(ImgXY::new(final_x, final_y))
   }
 }
-
-
-

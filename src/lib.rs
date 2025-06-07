@@ -145,6 +145,7 @@ impl XYZ {
 
 
 /// X, Y coordinates in an image
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImgXY {
   x: f64,
   y: f64,  
