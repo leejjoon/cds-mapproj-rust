@@ -532,4 +532,42 @@ mod sip_coeff_tests {
                           + 3.0 * 10.0 * v.powi(2);   // 3*C03*v^2
         assert_approx_eq(coeffs.dpdv(u, v), expected_dpdv, "dpdv(u,v) for M=3");
     }
+    
+    #[test]
+    fn test_sip_instance() {
+        // Create simple first-order coefficients for forward transformation (A_ij, B_ij)
+        // Coefficients are ordered like this: `0_0, 0_1, 0_2, 0_3, 1_0, 1_1, 1_2, 2_0, 2_1, 3_0`
+        let a_coeff = SipCoeff::new(Box::new([0., 0., 1.])); // A_00, A_01, A_10
+        let b_coeff = SipCoeff::new(Box::new([0., 0., 0.])); // B_00, B_01, B_10
+        let ab_proj = SipAB::new(a_coeff, b_coeff);
+        
+        let ap_coeff = SipCoeff::new(Box::new([0., 0., -0.5]));
+        let bp_coeff = SipCoeff::new(Box::new([0., 0., 0.]));
+        let ab_deproj = Some(SipAB::new(ap_coeff, bp_coeff));
+        
+        // Define the domain for u and v (pixel coordinates relative to CRPIX)
+        // Let's assume an image of 100x100 pixels with CRPIX at (50, 50)
+        let u_range = -50.0..=50.0;
+        let v_range = -50.0..=50.0;
+        
+        // Create the Sip instance
+        let sip = Sip::new(ab_proj, ab_deproj, u_range, v_range);
+        
+        // Test point in the domain
+        let test_u = 2.0;
+        let test_v = 0.0;
+        
+        // Test forward transformation
+        let f_uv = sip.f(test_u, test_v);
+        let g_uv = sip.g(test_u, test_v);
+        
+        assert_approx_eq(f_uv, 2., "f(u,v) calculation incorrect");
+        assert_approx_eq(g_uv, 0., "g(u,v) calculation incorrect");
+
+        if let Some(u1) = sip.u(f_uv, g_uv) {
+            assert_approx_eq(u1, -1., "u(f(u,v), g(u,v)) calculation incorrect");
+        }
+        
+        
+    }
 }
