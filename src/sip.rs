@@ -229,6 +229,59 @@ impl Sip {
     }
   }
   
+  /// Returns a new Sip object representing the inverse transformation.
+  /// This is achieved by swapping the `ab_proj` and `ab_deproj` coefficients.
+  /// If `ab_deproj` is `None` (i.e., no reverse polynomial coefficients like AP_ij, BP_ij are defined),
+  /// this method returns `None`, as a simple coefficient-swapped inverse Sip object cannot be formed.
+  /// Returns the forward SIP coefficients (A_ij, B_ij).
+  pub fn ab_proj(&self) -> &SipAB {
+    &self.ab_proj
+  }
+
+  /// Returns the 1st axis domain of validity for the SIP transformation.
+  pub fn u_domain(&self) -> &RangeInclusive<f64> {
+    &self.u
+  }
+
+  /// Returns the 2nd axis domain of validity for the SIP transformation.
+  pub fn v_domain(&self) -> &RangeInclusive<f64> {
+    &self.v
+  }
+
+  /// Returns a new Sip object representing the inverse transformation.
+  /// This is achieved by swapping the `ab_proj` and `ab_deproj` coefficients.
+  /// If `ab_deproj` is `None` (i.e., no reverse polynomial coefficients like AP_ij, BP_ij are defined),
+  /// this method returns `None`, as a simple coefficient-swapped inverse Sip object cannot be formed.
+  pub fn get_inverse_sip_transform(&self) -> Option<Self> {
+    if let Some(deproj_coeffs) = &self.ab_deproj {
+      Some(Sip {
+        ab_proj: deproj_coeffs.clone(),      // New forward coefficients are the old reverse coefficients
+        ab_deproj: Some(self.ab_proj.clone()), // New reverse coefficients are the old forward coefficients
+        u: self.u.clone(),     // Domains are assumed to be for the input of the respective ab_proj
+        v: self.v.clone(),
+        // Other fields like fuv, guv, n_iter, eps are specific to the iterative solver context
+        // and might not be directly applicable or needed for a simple coefficient-swapped inverse object.
+        // They are initialized to default/None values by Sip::new if not provided.
+        // For a simple inverse, we primarily care about the coefficients and domains.
+        // Let's rely on Sip::new's defaults or consider if they need specific values here.
+        // For now, assuming Sip::new handles this or they are not critical for the inverse object's structure.
+        // If Sip::new requires them, we'd need to pass them or suitable defaults.
+        // The current Sip::new takes ab_proj, ab_deproj, u, v. The other fields are not parameters to new.
+        // Let's check Sip::new parameters. It takes: ab_proj, ab_deproj, u, v.
+        // So, the current construction is fine for these fields.
+        // The other fields (fuv, guv, n_iter, eps) are set internally or have defaults in Sip::new.
+        // We need to ensure the new Sip object is valid. Let's check Sip::new again.
+        // Sip::new initializes fuv to u.clone(), guv to v.clone(), n_iter to N_ITER_MAX, and eps to EPS_MAX.
+        fuv: self.u.clone(), // Initialize with the u-domain, as in Sip::new
+        guv: self.v.clone(), // Initialize with the v-domain, as in Sip::new
+        n_iter: 20,          // Default value for n_iter, as in Sip::new
+        eps: 1.0e-9,         // Default value for eps, as in Sip::new
+      })
+    } else {
+      None // Cannot form a simple inverse by swapping if no deprojection coefficients exist
+    }
+  }
+
   /// Mutli-variate Newton-Raphson:
   /// f1(x1, ..., xn) = 0es006500
   /// ...
@@ -389,5 +442,94 @@ mod sip_coeff_tests {
         //                = 7.9
         let expected_dpdv = 3.0 + 5.0*u + 2.0*6.0*v;
         assert_approx_eq(coeffs.dpdv(u, v), expected_dpdv, "dpdv(u,v) for M=2");
+    }
+
+    #[test]
+    fn test_third_order_poly() {
+        // M_fits = 3 (third order polynomial)
+        // self.order in SipCoeff = M_fits + 1 = 4
+        // Number of coefficients = (M_fits + 1) * (M_fits + 2) / 2 = 4 * 5 / 2 = 10
+        // Polynomial: Sum_{i=0 to 3} Sum_{j=0 to 3-i} C_ij * u^i * v^j
+        // C00, C01*v, C02*v^2, C03*v^3,
+        // C10*u, C11*u*v, C12*u*v^2,
+        // C20*u^2, C21*u^2*v,
+        // C30*u^3
+
+        // FITS standard order for coefficients c (as used in SipCoeff::p, dpdu, dpdv loops):
+        // C00, C01, C02, C03, C10, C11, C12, C20, C21, C30
+        let c_fits_order = vec![
+            1.0,  // C00
+            3.0,  // C01
+            6.0,  // C02
+            10.0, // C03
+            2.0,  // C10
+            5.0,  // C11
+            9.0,  // C12
+            4.0,  // C20
+            8.0,  // C21
+            7.0   // C30
+        ];
+        let coeffs = SipCoeff::new(c_fits_order.into_boxed_slice());
+        assert_eq!(coeffs.order, 4, "SipCoeff.order should be M_fits + 1");
+
+        let u: f64 = 0.5;
+        let v: f64 = 0.2;
+
+        // Expected p(u,v) calculation:
+        // C00 = 1.0
+        // C10*u = 2.0 * 0.5 = 1.0
+        // C01*v = 3.0 * 0.2 = 0.6
+        // C20*u^2 = 4.0 * 0.5^2 = 4.0 * 0.25 = 1.0
+        // C11*u*v = 5.0 * 0.5 * 0.2 = 5.0 * 0.1 = 0.5
+        // C02*v^2 = 6.0 * 0.2^2 = 6.0 * 0.04 = 0.24
+        // C30*u^3 = 7.0 * 0.5^3 = 7.0 * 0.125 = 0.875
+        // C21*u^2*v = 8.0 * 0.5^2 * 0.2 = 8.0 * 0.25 * 0.2 = 8.0 * 0.05 = 0.4
+        // C12*u*v^2 = 9.0 * 0.5 * 0.2^2 = 9.0 * 0.5 * 0.04 = 9.0 * 0.02 = 0.18
+        // C03*v^3 = 10.0 * 0.2^3 = 10.0 * 0.008 = 0.08
+        // Sum = 1.0 + 1.0 + 0.6 + 1.0 + 0.5 + 0.24 + 0.875 + 0.4 + 0.18 + 0.08 = 5.875
+        let expected_p = 1.0                       // C00
+                       + 2.0 * u                   // C10*u
+                       + 3.0 * v                   // C01*v
+                       + 4.0 * u.powi(2)           // C20*u^2
+                       + 5.0 * u * v               // C11*u*v
+                       + 6.0 * v.powi(2)           // C02*v^2
+                       + 7.0 * u.powi(3)           // C30*u^3
+                       + 8.0 * u.powi(2) * v       // C21*u^2*v
+                       + 9.0 * u * v.powi(2)       // C12*u*v^2
+                       + 10.0 * v.powi(3);         // C03*v^3
+        assert_approx_eq(coeffs.p(u, v), expected_p, "p(u,v) for M=3");
+        assert_approx_eq(coeffs.p(0.0, 0.0), 1.0, "p(0,0) for M=3 should be C00 (1.0)");
+
+        // Expected dpdu(u,v) calculation:
+        // C10 = 2.0
+        // 2*C20*u = 2 * 4.0 * 0.5 = 4.0
+        // C11*v = 5.0 * 0.2 = 1.0
+        // 3*C30*u^2 = 3 * 7.0 * 0.5^2 = 21.0 * 0.25 = 5.25
+        // 2*C21*u*v = 2 * 8.0 * 0.5 * 0.2 = 16.0 * 0.1 = 1.6
+        // C12*v^2 = 9.0 * 0.2^2 = 9.0 * 0.04 = 0.36
+        // Sum = 2.0 + 4.0 + 1.0 + 5.25 + 1.6 + 0.36 = 14.21
+        let expected_dpdu = 2.0                       // C10
+                          + 2.0 * 4.0 * u             // 2*C20*u
+                          + 5.0 * v                   // C11*v
+                          + 3.0 * 7.0 * u.powi(2)     // 3*C30*u^2
+                          + 2.0 * 8.0 * u * v         // 2*C21*u*v
+                          + 9.0 * v.powi(2);          // C12*v^2
+        assert_approx_eq(coeffs.dpdu(u, v), expected_dpdu, "dpdu(u,v) for M=3");
+
+        // Expected dpdv(u,v) calculation:
+        // C01 = 3.0
+        // C11*u = 5.0 * 0.5 = 2.5
+        // 2*C02*v = 2 * 6.0 * 0.2 = 2.4
+        // C21*u^2 = 8.0 * 0.5^2 = 2.0
+        // 2*C12*u*v = 2 * 9.0 * 0.5 * 0.2 = 1.8
+        // 3*C03*v^2 = 3 * 10.0 * 0.2^2 = 1.2
+        // Sum = 3.0 + 2.5 + 2.4 + 2.0 + 1.8 + 1.2 = 12.9
+        let expected_dpdv = 3.0                       // C01
+                          + 5.0 * u                   // C11*u
+                          + 2.0 * 6.0 * v             // 2*C02*v
+                          + 8.0 * u.powi(2)           // C21*u^2
+                          + 2.0 * 9.0 * u * v         // 2*C12*u*v
+                          + 3.0 * 10.0 * v.powi(2);   // 3*C03*v^2
+        assert_approx_eq(coeffs.dpdv(u, v), expected_dpdv, "dpdv(u,v) for M=3");
     }
 }

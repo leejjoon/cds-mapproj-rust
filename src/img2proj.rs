@@ -357,9 +357,23 @@ pub struct WcsWithSipProjXY2ImgXY {
 impl ProjXY2ImgXY for WcsWithSipProjXY2ImgXY {
 
   fn proj2img(&self, xy: &ProjXY) -> Option<ImgXY> {
-    let x = self.wcs.icd11 * xy.x + self.wcs.icd12 * xy.y + self.wcs.crpix1;
-    let y = self.wcs.icd21 * xy.x + self.wcs.icd22 * xy.y + self.wcs.crpix2;
-    self.sip.inverse(x, y).map(|ImgXY{x: rx, y: ry}| ImgXY::new(x + rx, y + ry))
+    // Step 1: Transform from projection plane (xy) to intermediate world coordinates (u_corr, v_corr)
+    // These are relative to the reference pixel but are not yet pixel coordinates.
+    let u_corr = self.wcs.icd11 * xy.x + self.wcs.icd12 * xy.y;
+    let v_corr = self.wcs.icd21 * xy.x + self.wcs.icd22 * xy.y;
+
+    // Step 2: Apply inverse SIP distortion correction.
+    // self.sip.inverse(u_corr, v_corr) is expected to return pixel coordinates relative to CRPIX (u, v).
+    // So, if sip_output is ImgXY{x: u_val, y: v_val}, then u_val = x_pix - crpix1 and v_val = y_pix - crpix2.
+    self.sip.inverse(u_corr, v_corr).map(|sip_output_uv| {
+      // sip_output_uv.x is u (pixel x-coordinate relative to CRPIX1)
+      // sip_output_uv.y is v (pixel y-coordinate relative to CRPIX2)
+      
+      // Step 3: Add CRPIX to obtain the final image pixel coordinates.
+      let final_x_pix = sip_output_uv.x + self.wcs.crpix1;
+      let final_y_pix = sip_output_uv.y + self.wcs.crpix2;
+      ImgXY::new(final_x_pix, final_y_pix)
+    })
   }
 }
 
