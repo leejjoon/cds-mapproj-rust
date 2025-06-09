@@ -532,7 +532,80 @@ mod sip_coeff_tests {
                           + 3.0 * 10.0 * v.powi(2);   // 3*C03*v^2
         assert_approx_eq(coeffs.dpdv(u, v), expected_dpdv, "dpdv(u,v) for M=3");
     }
+
+    #[test]
+    fn test_sip_astropy1() {
+        
+        // from pix to foc
+        let a_coeff = SipCoeff::new(Box::new([0.0, 0.0, 1.569e-05, 0.0, 5.232e-05, 3.31e-05]));
+        let b_coeff = SipCoeff::new(Box::new([0.0, 0.0, 4.172e-05, 0.0, 2.213e-05, -9.819e-07]));
+        
+        // Define the inverse transformation coefficients (AP, BP)
+        let ap_coeff = SipCoeff::new(Box::new([0.0, 5.677e-05, -1.569e-05, 5.871e-05, -5.231e-05, -3.309e-05]));
+        let bp_coeff = SipCoeff::new(Box::new([0.0, 4.432e-05, -4.172e-05, 2.091e-05, -2.213e-05, 9.814e-07]));
+        
+        // Define the valid range for u and v coordinates
+        let u_range = -64.0..=64.0;
+        let v_range = -32.0..=32.0;
+        
+        // Test cases: (u, v, expected_f, expected_g)
+        let test_cases = [
+            (-64.0, -32.0, -63.74120447999999, -31.915978342399995),
+            (0.0, -32.0, 0.01606656000001294, -31.957278720000005),
+            (64.0, -32.0, 64.0444928, -32.006622822400004),
+            (-64.0, 0.0, -63.864422399999995, -0.004021862399994802),
+            (0.0, 0.0, 0.0, 0.0),
+        ];
     
+        // Create the SIP transformation
+        let ab_proj = SipAB::new(a_coeff, b_coeff);
+        let ab_deproj = Some(SipAB::new(ap_coeff, bp_coeff));
+        let sip = Sip::new(ab_proj, ab_deproj, u_range, v_range);
+        
+        // Test each case
+        for (i, &(u, v, uf, vg)) in test_cases.iter().enumerate() {
+            
+          let f_uv = sip.f(u, v);
+          let g_uv = sip.g(u, v);
+          
+          // Test with a relative tolerance of 1e-10
+          let abs_tol = 1e-2;
+          let f_diff = (u + f_uv - uf).abs();
+          let g_diff = (v + g_uv - vg).abs();
+          
+          assert!(
+              f_diff <= abs_tol,
+              "Case {}: f({}, {}) = {}, expected {}. Difference: {} > {}",
+              i, u, v, f_uv, uf, f_diff, abs_tol
+          );
+          assert!(
+            g_diff <= abs_tol,
+            "Case {}: g({}, {}) = {}, expected {}. Difference: {} > {}",
+            i, u, v, g_uv, vg, g_diff, abs_tol
+          );
+
+          // Test inverse transformation if we have deprojection coefficients
+          if let (Some(U), Some(V)) = (sip.u(uf, vg), sip.v(uf, vg)) {
+            let u_diff = (uf + U - u).abs();
+            let v_diff = (vg + V - v).abs();
+            
+            assert!(
+                u_diff <= abs_tol,
+                "Case {}: u({}, {}) = {}, expected {}. Difference: {} > {}",
+                i, uf, vg, U, u, u_diff, abs_tol
+            );
+          
+            assert!(
+                v_diff <= abs_tol,
+                "Case {}: v({}, {}) = {}, expected {}. Difference: {} > {}",
+                i, uf, vg, V, v, v_diff, abs_tol
+            );
+          }
+
+
+        }
+    }        
+
     #[test]
     fn test_sip_instance() {
         // Create simple first-order coefficients for forward transformation (A_ij, B_ij)
@@ -541,7 +614,7 @@ mod sip_coeff_tests {
         let b_coeff = SipCoeff::new(Box::new([0., 0., 0.])); // B_00, B_01, B_10
         let ab_proj = SipAB::new(a_coeff, b_coeff);
         
-        let ap_coeff = SipCoeff::new(Box::new([0., 0., -0.5]));
+        let ap_coeff = SipCoeff::new(Box::new([0., 0., -0.5e0]));
         let bp_coeff = SipCoeff::new(Box::new([0., 0., 0.]));
         let ab_deproj = Some(SipAB::new(ap_coeff, bp_coeff));
         
